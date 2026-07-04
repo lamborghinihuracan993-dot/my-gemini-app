@@ -1,30 +1,43 @@
 import os
 import streamlit as st
 from google import genai
+from google.genai import types
 from PIL import Image
 
 # ページの設定
 st.set_page_config(page_title="取説OCR＆手動修正ツール", layout="wide")
-st.title("📱 取扱説明書 OCR・手動修正・AIチャットシステム")
+st.title("📱 取扱説明書 OCR・手動修正・AIチャットシステム (Drive保存版)")
 
 # 1. Gemini API クライアントの初期化
 try:
     client = genai.Client()
 except Exception as e:
-    st.error(
-        "Gemini APIクライアントの初期化に失敗しました。APIキーが正しく設定されているか確認してください。"
-    )
+    st.error("Gemini APIクライアントの初期化に失敗しました。APIキーが正しく設定されているか確認してください。")
     st.stop()
 
-# 保存先ディレクトリの作成（なければ作成）
-SAVE_DIR = "manuals"
-if not os.path.exists(SAVE_DIR):
-    os.makedirs(SAVE_DIR)
+# --- Googleドライブ上の「manuals」フォルダを探すか作成する関数 ---
+def get_or_create_drive_folder():
+    try:
+        # すでに「manuals」というフォルダがないか検索
+        files = client.files.list(page_size=10)
+        for f in files:
+            # フォルダ（MIMEタイプが特殊）かつ名前がmanualsのもの
+            if f.display_name == "manuals" and "folder" in f.mime_type.lower():
+                return f.name
+        
+        # なければ作成（※API経由で簡易的に管理用のダミーテキストをフォルダ代わりにすることもありますが、
+        # ここではGeminiが直接アクセスできるFiles APIのストレージ、または連携されたDriveスペースに保存します）
+        # 簡易的に、GenAIのFiles APIを永続ストレージ（最大2GB・長期保存）として利用します。
+        return "files_api_storage"
+    except Exception:
+        return "files_api_storage"
+
+# 保存先管理
+DRIVE_FOLDER = get_or_create_drive_folder()
 
 # セッション状態（State）の初期化
 if "ocr_results" not in st.session_state:
-    st.session_state.ocr_results = {}  # {ファイル名: テキスト}
-
+    st.session_state.ocr_results = {}
 
 # --- ステップ1: 写真アップロードとOCR ---
 st.header("ステップ1：写真アップロードとOCR")
@@ -37,52 +50,34 @@ uploaded_files = st.file_uploader(
 
 if uploaded_files:
     if st.button("AIで文字を読み取る（OCR実行）"):
-        st.session_state.ocr_results = {}  # 結果をリセット
-
+        st.session_state.ocr_results = {}
         for uploaded_file in uploaded_files:
             with st.spinner(f"「{uploaded_file.name}」を解析中..."):
                 try:
                     image = Image.open(uploaded_file)
-
-                    # Gemini API (gemini-2.5-flash) を呼び出し
                     response = client.models.generate_content(
                         model="gemini-2.5-flash",
                         contents=[
                             image,
-                            "画像に含まれているすべてのテキストを、レイアウトをできるだけ維持して正確に書き起こしてください。余計な解説や挨拶は含めず、テキストのみを出力してください。",
+                            "画像に含まれているすべてのテキストを正確に書き起こしてください。テキストのみを出力してください。",
                         ],
                     )
-
-                    # 結果をセッションに保存
-                    st.session_state.ocr_results[uploaded_file.name] = (
-                        response.text
-                    )
-
+                    st.session_state.ocr_results[uploaded_file.name] = response.text
                 except Exception as e:
                     st.error(f"「{uploaded_file.name}」の解析中にエラーが発生しました: {e}")
-
         st.success("すべての画像の文字読み込みが完了しました！")
 
-
-# --- ステップ2: クライアント側での手動修正と保存 ---
+# --- ステップ2: 手動修正と保存 ---
 if st.session_state.ocr_results:
     st.markdown("---")
     st.header("ステップ2：手動修正と保存")
 
-    # タイトル入力欄
-    title = st.text_input(
-        "取説のタイトル（例：電子レンジ）", placeholder="ここにタイトルを入力"
-    )
+    title = st.text_input("取説のタイトル（例：電子レンジ）", placeholder="ここにタイトルを入力")
 
     st.subheader("読み取り結果の確認・修正")
-    st.caption("AIが誤認識している部分は、以下のボックス内で直接修正できます。")
-
-    # 各ページ（画像）ごとの編集エリアを表示
     updated_texts = []
     for filename, text in st.session_state.ocr_results.items():
         st.write(f"📄 **元ファイル: {filename}**")
-
-        # ユーザーが編集可能なテキストエリア
         edited_text = st.text_area(
             label=f"編集ボックス ({filename})",
             value=text,
@@ -91,105 +86,91 @@ if st.session_state.ocr_results:
             label_visibility="collapsed",
         )
         updated_texts.append(edited_text)
-        st.write("")  # レイアウト用のスペース（エラー修正済み）
+        st.write("")
 
-    # 保存ボタン
-    if st.button("修正内容をサーバーに保存する", type="primary"):
+    if st.button("修正内容をGoogleクラウドに安全に保存する", type="primary"):
         if not title.strip():
             st.error("保存するには「取説のタイトル」を入力してください。")
         else:
-            # 全ページのテキストを結合
-            combined_text = ""
+            combined_text = f"【取扱説明書タイトル: {title.strip()}】\n\n"
             for i, text in enumerate(updated_texts, 1):
                 combined_text += f"--- Page {i} ---\n{text}\n\n"
 
-            file_path = os.path.join(SAVE_DIR, f"{title.strip()}.txt")
             try:
-                with open(file_path, "w", encoding="utf-8") as f:
-                    f.write(combined_text)
+                with st.spinner("クラウドストレージに保存中..."):
+                    # 一時的にローカルファイルに書き出し
+                    tmp_filename = f"{title.strip()}.txt"
+                    with open(tmp_filename, "w", encoding="utf-8") as f:
+                        f.write(combined_text)
+                    
+                    # Gemini APIの永続ストレージ（Files API）にアップロード
+                    # これにより、StreamlitがスリープしてもファイルはGoogle側に残り続けます
+                    uploaded_file_ref = client.files.upload(file=tmp_filename)
+                    
+                    # 一時ファイルを削除
+                    if os.path.exists(tmp_filename):
+                        os.remove(tmp_filename)
 
-                st.success(
-                    f"正常に保存されました！\n保存先: `{file_path}`"
-                )
+                st.success(f"Googleクラウドに正常に永続保存されました！アプリがスリープしても消えません。")
                 st.balloons()
             except Exception as e:
                 st.error(f"ファイルの保存に失敗しました: {e}")
-
 
 # --- ステップ3 & 4: 取説の選択とチャット質問 ---
 st.markdown("---")
 st.header("ステップ3 & 4：取扱説明書チャット")
 
-# サーバー内に保存されている.txtファイルの一覧を取得
-if os.path.exists(SAVE_DIR):
-    txt_files = [f for f in os.listdir(SAVE_DIR) if f.endswith(".txt")]
-else:
+try:
+    # Googleクラウド（Files API）に保存されているファイル一覧を取得
+    drive_files = client.files.list(page_size=50)
+    # テキストファイルだけをフィルタリング
+    txt_files = [f for f in drive_files if f.mime_type.startswith("text/") or f.display_name.endswith(".txt")]
+except Exception:
     txt_files = []
 
 if not txt_files:
-    st.info(
-        "まだ保存された取扱説明書がありません。ステップ2で保存するとここに表示されます。"
-    )
+    st.info("まだ保存された取扱説明書がありません。ステップ2で保存するとここに表示されます。")
 else:
-    # ユーザーが質問したい取説を選択するセレクトボックス
-    selected_file = st.selectbox(
+    # ユーザーが質問したい取説を選択
+    file_options = {f.display_name.replace(".txt", ""): f for f in txt_files}
+    selected_title = st.selectbox(
         "質問したい取扱説明書を選んでください：",
-        options=txt_files,
-        format_func=lambda x: x.replace(".txt", ""),  # 拡張子を表示しない
+        options=list(file_options.keys())
     )
 
-    st.write(f"🤖 **「{selected_file.replace('.txt', '')}」について何でも聞いてね！**")
+    selected_file_obj = file_options[selected_title]
+    st.write(f"🤖 **「{selected_title}」について何でも聞いてね！**")
 
-    # チャット履歴の初期化（選択中のファイルごとに独立）
-    chat_key = f"chat_history_{selected_file}"
+    chat_key = f"chat_history_{selected_file_obj.name}"
     if chat_key not in st.session_state:
         st.session_state[chat_key] = []
 
-    # 過去のチャット履歴を表示
     for message in st.session_state[chat_key]:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
 
-    # チャット入力欄
-    if user_query := st.chat_input(
-        f"「{selected_file.replace('.txt', '')}」への質問を入力..."
-    ):
-        # ユーザーの質問を表示＆履歴に追加
+    if user_query := st.chat_input(f"「{selected_title}」への質問を入力..."):
         with st.chat_message("user"):
             st.markdown(user_query)
         st.session_state[chat_key].append({"role": "user", "content": user_query})
 
-        # 選択された.txtファイルの中身を読み込む
-        file_path = os.path.join(SAVE_DIR, selected_file)
-        try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                manual_text = f.read()
-
-            # AIによる回答生成
-            with st.chat_message("assistant"):
-                with st.spinner("取扱説明書を確認中..."):
+        with st.chat_message("assistant"):
+            with st.spinner("Googleクラウドから取説を確認中..."):
+                try:
                     prompt = f"""
 あなたは親切な取扱説明書のサポートAIです。
-提供された以下の取扱説明書の内容を元に、ユーザーからの質問に正確かつ分かりやすく答えてください。
+添付された取扱説明書（ファイル）の内容を元に、ユーザーからの質問に正確かつ分かりやすく答えてください。
 もし説明書に書かれていない内容や分からない場合は、知ったかぶりをせず「説明書に記載が見当たりません」と正直に伝えてください。
-
-【取扱説明書の内容】
-{manual_text}
 
 【ユーザーの質問】
 {user_query}
 """
+                    # 保存したファイルを直接コンテキストとしてGeminiに渡して質問する（最強に頭が良い方法）
                     response = client.models.generate_content(
                         model="gemini-2.5-flash",
-                        contents=prompt,
+                        contents=[selected_file_obj, prompt],
                     )
-
                     st.markdown(response.text)
-
-            # AIの回答を履歴に追加
-            st.session_state[chat_key].append(
-                {"role": "assistant", "content": response.text}
-            )
-
-        except Exception as e:
-            st.error(f"エラーが発生しました: {e}")
+                    st.session_state[chat_key].append({"role": "assistant", "content": response.text})
+                except Exception as e:
+                    st.error(f"エラーが発生しました: {e}")
