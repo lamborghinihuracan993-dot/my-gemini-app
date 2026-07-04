@@ -1,6 +1,7 @@
 import os
 import streamlit as st
 from google import genai
+from google.genai import types  # 💥ここを入れ忘れていました！
 from PIL import Image
 import uuid
 
@@ -79,7 +80,6 @@ if st.session_state.ocr_results:
         if not title.strip():
             st.error("保存するには「取説のタイトル」を入力してください。")
         else:
-            # 1行目に日本語タイトルを隠し持たせる
             combined_text = f"TITLE:{title.strip()}\n"
             combined_text += f"【取扱説明書タイトル: {title.strip()}】\n\n"
             for i, text in enumerate(updated_texts, 1):
@@ -87,16 +87,13 @@ if st.session_state.ocr_results:
 
             try:
                 with st.spinner("クラウドストレージに保存中..."):
-                    # エラー回避のためファイル名は英語(ランダムID)にする
                     unique_id = str(uuid.uuid4())[:8]
                     filename = f"manual_{unique_id}.txt"
                     local_path = os.path.join(SAVE_DIR, filename)
                     
-                    # 1. ローカルに保存
                     with open(local_path, "w", encoding="utf-8") as f:
                         f.write(combined_text)
                     
-                    # 2. Gemini APIの永続ストレージにアップロード
                     client.files.upload(file=local_path)
 
                 st.success(f"Googleクラウドに正常に永続保存されました！")
@@ -110,13 +107,11 @@ if st.session_state.ocr_results:
 st.markdown("---")
 st.header("ステップ3 & 4：取扱説明書チャット")
 
-# ファイル名リストを集める
 raw_files = []
 if os.path.exists(SAVE_DIR):
     raw_files = [f for f in os.listdir(SAVE_DIR) if f.endswith(".txt")]
 
 try:
-    # 💥 page_sizeを仕様通りの config=types.ListFilesConfig(limit=50) に修正
     drive_files = client.files.list(config=types.ListFilesConfig(limit=50))
     for f in drive_files:
         if f.display_name.endswith(".txt") and f.display_name not in raw_files:
@@ -124,8 +119,7 @@ try:
 except Exception:
     pass
 
-# 日本語タイトルを抜き出す
-file_options = {}  # { "日本語タイトル": "実際の英数字ファイル名.txt" }
+file_options = {}
 
 for f_name in raw_files:
     local_path = os.path.join(SAVE_DIR, f_name)
@@ -176,7 +170,6 @@ else:
                         with open(local_path, "r", encoding="utf-8") as f:
                             manual_text = f.read()
                     else:
-                        # 💥 一覧取得のバグ修正
                         drive_files = client.files.list(config=types.ListFilesConfig(limit=50))
                         for f in drive_files:
                             if f.display_name == selected_file:
@@ -222,14 +215,13 @@ else:
                 if os.path.exists(local_path):
                     os.remove(local_path)
                 
-                # 💥 一覧取得のバグ修正
                 drive_files = client.files.list(config=types.ListFilesConfig(limit=50))
                 for f in drive_files:
                     if f.display_name == selected_file:
                         client.files.delete(name=f.name)
                         break
                         
-            st.success(f"「{display_title}」を削除しました。")
+            st.success(f"「{selected_title}」を削除しました。")
             st.rerun()
         except Exception as e:
             st.error(f"削除に失敗しました: {e}")
