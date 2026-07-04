@@ -1,13 +1,13 @@
 import os
 import streamlit as st
 from google import genai
-from google.genai import types  # 💥ここを入れ忘れていました！
+from google.genai import types
 from PIL import Image
 import uuid
 
 # ページの設定
-st.set_page_config(page_title="取説OCR＆手動修正ツール", layout="wide")
-st.title("📱 取扱説明書 OCR・手動修正・AIチャットシステム")
+st.set_page_config(page_title="ファイルOCR＆AIチャットツール", layout="wide")
+st.title("📱 ファイル OCR・手動修正・AIチャットシステム")
 
 # 1. Gemini API クライアントの初期化
 try:
@@ -17,7 +17,7 @@ except Exception as e:
     st.stop()
 
 # ローカルの一時保存フォルダ（即時反映用）
-SAVE_DIR = "manuals"
+SAVE_DIR = "documents"
 if not os.path.exists(SAVE_DIR):
     os.makedirs(SAVE_DIR)
 
@@ -27,10 +27,10 @@ if "ocr_results" not in st.session_state:
 
 
 # --- ステップ1: 写真アップロードとOCR ---
-st.header("ステップ1：写真アップロードとOCR")
+st.header("ステップ1：画像・写真のアップロードとOCR")
 
 uploaded_files = st.file_uploader(
-    "取扱説明書の画像をアップロードしてください（複数同時選択可）",
+    "テキストが含まれる画像をアップロードしてください（複数同時選択可）",
     type=["png", "jpg", "jpeg"],
     accept_multiple_files=True,
 )
@@ -58,9 +58,9 @@ if uploaded_files:
 # --- ステップ2: 手動修正と保存 ---
 if st.session_state.ocr_results:
     st.markdown("---")
-    st.header("ステップ2：手動修正と保存")
+    st.header("ステップ2：内容の確認・修正と保存")
 
-    title = st.text_input("取説のタイトル（例：電子レンジ）", placeholder="ここにタイトルを入力")
+    title = st.text_input("ファイル・書類のタイトル（例：〇〇のメール、家電の取説、会議メモ）", placeholder="ここにタイトルを入力")
 
     st.subheader("読み取り結果の確認・修正")
     updated_texts = []
@@ -78,17 +78,19 @@ if st.session_state.ocr_results:
 
     if st.button("修正内容をGoogleクラウドに安全に保存する", type="primary"):
         if not title.strip():
-            st.error("保存するには「取説のタイトル」を入力してください。")
+            st.error("保存するには「ファイル・書類のタイトル」を入力してください。")
         else:
+            # 1行目にタイトルを埋め込んでおく
             combined_text = f"TITLE:{title.strip()}\n"
-            combined_text += f"【取扱説明書タイトル: {title.strip()}】\n\n"
+            combined_text += f"【ファイルタイトル: {title.strip()}】\n\n"
             for i, text in enumerate(updated_texts, 1):
                 combined_text += f"--- Page {i} ---\n{text}\n\n"
 
             try:
                 with st.spinner("クラウドストレージに保存中..."):
+                    # エラー回避のためファイル名は英語(ランダムID)にする
                     unique_id = str(uuid.uuid4())[:8]
-                    filename = f"manual_{unique_id}.txt"
+                    filename = f"doc_{unique_id}.txt"
                     local_path = os.path.join(SAVE_DIR, filename)
                     
                     with open(local_path, "w", encoding="utf-8") as f:
@@ -103,16 +105,16 @@ if st.session_state.ocr_results:
                 st.error(f"ファイルの保存に失敗しました: {e}")
 
 
-# --- ステップ3 & 4: 取説の選択とチャット質問 ---
+# --- ステップ3 & 4: ファイルの選択とチャット質問 ---
 st.markdown("---")
-st.header("ステップ3 & 4：取扱説明書チャット")
+st.header("ステップ3 & 4：ファイルについてチャット・質問")
 
 raw_files = []
 if os.path.exists(SAVE_DIR):
     raw_files = [f for f in os.listdir(SAVE_DIR) if f.endswith(".txt")]
 
 try:
-    drive_files = client.files.list(config=types.ListFilesConfig(limit=50))
+    drive_files = client.files.list(config=types.ListFilesConfig(page_size=50))
     for f in drive_files:
         if f.display_name.endswith(".txt") and f.display_name not in raw_files:
             raw_files.append(f.display_name)
@@ -136,10 +138,10 @@ for f_name in raw_files:
         file_options[f_name] = f_name
 
 if not file_options:
-    st.info("まだ保存された取扱説明書がありません。ステップ2で保存するとここに表示されます。")
+    st.info("まだ保存されたファイルがありません。ステップ2で保存するとここに表示されます。")
 else:
     selected_title = st.selectbox(
-        "質問したい取扱説明書を選んでください：",
+        "質問・参照したいファイルを選んでください：",
         options=list(file_options.keys())
     )
     selected_file = file_options[selected_title]
@@ -154,13 +156,13 @@ else:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
 
-    if user_query := st.chat_input(f"「{selected_title}」への質問を入力..."):
+    if user_query := st.chat_input(f"「{selected_title}」への質問や指示を入力..."):
         with st.chat_message("user"):
             st.markdown(user_query)
         st.session_state[chat_key].append({"role": "user", "content": user_query})
 
         with st.chat_message("assistant"):
-            with st.spinner("取説を確認中..."):
+            with st.spinner("ファイルを確認中..."):
                 try:
                     local_path = os.path.join(SAVE_DIR, selected_file)
                     manual_text = ""
@@ -170,7 +172,7 @@ else:
                         with open(local_path, "r", encoding="utf-8") as f:
                             manual_text = f.read()
                     else:
-                        drive_files = client.files.list(config=types.ListFilesConfig(limit=50))
+                        drive_files = client.files.list(config=types.ListFilesConfig(page_size=50))
                         for f in drive_files:
                             if f.display_name == selected_file:
                                 target_file_obj = f
@@ -178,15 +180,17 @@ else:
                         if target_file_obj:
                             manual_text = "※クラウド上のファイルを参照中"
                 
+                    # 💥 AIへの指示（プロンプト）を汎用的な内容に修正
                     prompt = f"""
-あなたは親切な取扱説明書のサポートAIです。
-提供された以下の取扱説明書の内容を元に、ユーザーからの質問に正確かつ分かりやすく答えてください。
-もし説明書に書かれていない内容や分からない場合は、知ったかぶりをせず「説明書に記載が見当たりません」と正直に伝えてください。
+あなたはユーザーをサポートする親切で優秀なAIアシスタントです。
+提供された以下のファイル（または書類・テキスト）の内容をベースにして、ユーザーからの質問に正確に答えたり、指示に沿った対応（要約、返信文の作成、分析など）を行ってください。
 
-【取扱説明書の内容】
+もし提供されたファイルの内容だけでは分からない、あるいは記載がない一般的な知識についての質問などの場合は、知ったかぶりをせず、ファイルに記載がない旨を伝えた上で、あなたの持つ知識をもとに親切にサポートしてください。
+
+【対象のファイル内容】
 {manual_text if target_file_obj is None else ''}
 
-【ユーザーの質問】
+【ユーザーからの質問・指示】
 {user_query}
 """
                     if os.path.exists(local_path):
@@ -215,7 +219,7 @@ else:
                 if os.path.exists(local_path):
                     os.remove(local_path)
                 
-                drive_files = client.files.list(config=types.ListFilesConfig(limit=50))
+                drive_files = client.files.list(config=types.ListFilesConfig(page_size=50))
                 for f in drive_files:
                     if f.display_name == selected_file:
                         client.files.delete(name=f.name)
