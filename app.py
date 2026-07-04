@@ -174,3 +174,19 @@ else:
                     st.session_state[chat_key].append({"role": "assistant", "content": response.text})
                 except Exception as e:
                     st.error(f"エラーが発生しました: {e}")
+
+# ---- 削除ボタンの追加 ----
+    st.markdown("---")
+    st.subheader("ファイルの管理")
+    if st.button(f"🗑️ 「{selected_title}」をクラウドから削除する", type="secondary"):
+        try:
+            with st.spinner("削除中..."):
+                # Gemini APIのストレージからファイルを削除
+                client.files.delete(name=selected_file_obj.name)
+            st.success(f"「{selected_title}」を削除しました。画面を再読み込みしてください。")
+            st.balloons()
+            # 履歴もクリア
+            if chat_key in st.session_state:
+                del st.session_state[chat_key]
+        except Exception as e:
+            st.error(f"削除に失敗しました: {e}")
