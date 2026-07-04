@@ -79,7 +79,7 @@ if st.session_state.ocr_results:
         if not title.strip():
             st.error("保存するには「取説のタイトル」を入力してください。")
         else:
-            # 1行目にタイトルを埋め込んでおく（ファイル名が英数字になっても、ここからタイトルを読み取れるようにするため）
+            # 1行目に日本語タイトルを隠し持たせる
             combined_text = f"TITLE:{title.strip()}\n"
             combined_text += f"【取扱説明書タイトル: {title.strip()}】\n\n"
             for i, text in enumerate(updated_texts, 1):
@@ -87,7 +87,7 @@ if st.session_state.ocr_results:
 
             try:
                 with st.spinner("クラウドストレージに保存中..."):
-                    # エラー回避のため、ファイル名は完全に英数字（ランダムなID）にする
+                    # エラー回避のためファイル名は英語(ランダムID)にする
                     unique_id = str(uuid.uuid4())[:8]
                     filename = f"manual_{unique_id}.txt"
                     local_path = os.path.join(SAVE_DIR, filename)
@@ -96,7 +96,7 @@ if st.session_state.ocr_results:
                     with open(local_path, "w", encoding="utf-8") as f:
                         f.write(combined_text)
                     
-                    # 2. Gemini APIの永続ストレージにアップロード（ファイル名が英語なのでエラーが出ない）
+                    # 2. Gemini APIの永続ストレージにアップロード
                     client.files.upload(file=local_path)
 
                 st.success(f"Googleクラウドに正常に永続保存されました！")
@@ -116,14 +116,15 @@ if os.path.exists(SAVE_DIR):
     raw_files = [f for f in os.listdir(SAVE_DIR) if f.endswith(".txt")]
 
 try:
-    drive_files = client.files.list(page_size=50)
+    # 💥 page_sizeを仕様通りの config=types.ListFilesConfig(limit=50) に修正
+    drive_files = client.files.list(config=types.ListFilesConfig(limit=50))
     for f in drive_files:
         if f.display_name.endswith(".txt") and f.display_name not in raw_files:
             raw_files.append(f.display_name)
 except Exception:
     pass
 
-# 各ファイルの中身の1行目から「日本語のタイトル」を抜き出す
+# 日本語タイトルを抜き出す
 file_options = {}  # { "日本語タイトル": "実際の英数字ファイル名.txt" }
 
 for f_name in raw_files:
@@ -136,8 +137,6 @@ for f_name in raw_files:
                     display_name = first_line.replace("TITLE:", "")
                     file_options[display_name] = f_name
         else:
-            # ローカルになくクラウドにのみある場合（スリープ復帰後など）
-            # ここでは簡易的にファイル名をそのまま出すか、チャット時に処理
             file_options[f_name] = f_name
     except Exception:
         file_options[f_name] = f_name
@@ -145,7 +144,6 @@ for f_name in raw_files:
 if not file_options:
     st.info("まだ保存された取扱説明書がありません。ステップ2で保存するとここに表示されます。")
 else:
-    # ユーザーには「日本語のタイトル」を選んでもらう
     selected_title = st.selectbox(
         "質問したい取扱説明書を選んでください：",
         options=list(file_options.keys())
@@ -178,7 +176,8 @@ else:
                         with open(local_path, "r", encoding="utf-8") as f:
                             manual_text = f.read()
                     else:
-                        drive_files = client.files.list(page_size=50)
+                        # 💥 一覧取得のバグ修正
+                        drive_files = client.files.list(config=types.ListFilesConfig(limit=50))
                         for f in drive_files:
                             if f.display_name == selected_file:
                                 target_file_obj = f
@@ -223,13 +222,14 @@ else:
                 if os.path.exists(local_path):
                     os.remove(local_path)
                 
-                drive_files = client.files.list(page_size=50)
+                # 💥 一覧取得のバグ修正
+                drive_files = client.files.list(config=types.ListFilesConfig(limit=50))
                 for f in drive_files:
                     if f.display_name == selected_file:
                         client.files.delete(name=f.name)
                         break
                         
-            st.success(f"「{selected_title}」を削除しました。")
+            st.success(f"「{display_title}」を削除しました。")
             st.rerun()
         except Exception as e:
             st.error(f"削除に失敗しました: {e}")
